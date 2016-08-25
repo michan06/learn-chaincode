@@ -1,12 +1,9 @@
 /*
-Copyright IBM Corp 2016 All Rights Reserved.
-
+Copyright IBM Corp. 2016 All Rights Reserved.
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
-
 		 http://www.apache.org/licenses/LICENSE-2.0
-
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -19,97 +16,131 @@ package main
 import (
 	"errors"
 	"fmt"
+	"strconv"
 
+	"hyperledger/cci/appinit"
+	"hyperledger/cci/org/hyperledger/chaincode/example02"
+	"hyperledger/ccs"
+
+	"github.com/golang/protobuf/proto"
 	"github.com/hyperledger/fabric/core/chaincode/shim"
 )
 
-// SimpleChaincode example simple Chaincode implementation
-type SimpleChaincode struct {
+type ChaincodeExample struct {
+}
+
+// Called to initialize the chaincode
+func (t *ChaincodeExample) Init(stub *shim.ChaincodeStub, param *appinit.Init) error {
+
+	var err error
+
+	fmt.Printf("Aval = %d, Bval = %d\n", param.PartyA.Value, param.PartyB.Value)
+
+	// Write the state to the ledger
+	err = t.PutState(stub, param.PartyA)
+	if err != nil {
+		return err
+	}
+
+	err = t.PutState(stub, param.PartyB)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// Transaction makes payment of X units from A to B
+func (t *ChaincodeExample) MakePayment(stub *shim.ChaincodeStub, param *example02.PaymentParams) error {
+
+	var err error
+
+	// Get the state from the ledger
+	src, err := t.GetState(stub, param.PartySrc)
+	if err != nil {
+		return err
+	}
+
+	dst, err := t.GetState(stub, param.PartyDst)
+	if err != nil {
+		return err
+	}
+
+	// Perform the execution
+	X := int(param.Amount)
+	src = src - X
+	dst = dst + X
+	fmt.Printf("Aval = %d, Bval = %d\n", src, dst)
+
+	// Write the state back to the ledger
+	err = stub.PutState(param.PartySrc, []byte(strconv.Itoa(src)))
+	if err != nil {
+		return err
+	}
+
+	err = stub.PutState(param.PartyDst, []byte(strconv.Itoa(dst)))
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// Deletes an entity from state
+func (t *ChaincodeExample) DeleteAccount(stub *shim.ChaincodeStub, param *example02.Entity) error {
+
+	// Delete the key from the state in ledger
+	err := stub.DelState(param.Id)
+	if err != nil {
+		return errors.New("Failed to delete state")
+	}
+
+	return nil
+}
+
+// Query callback representing the query of a chaincode
+func (t *ChaincodeExample) CheckBalance(stub *shim.ChaincodeStub, param *example02.Entity) (*example02.BalanceResult, error) {
+	var err error
+
+	// Get the state from the ledger
+	val, err := t.GetState(stub, param.Id)
+	if err != nil {
+		return nil, err
+	}
+
+	fmt.Printf("Query Response: %d\n", val)
+	return &example02.BalanceResult{Balance: *proto.Int32(int32(val))}, nil
 }
 
 func main() {
-	err := shim.Start(new(SimpleChaincode))
+	self := &ChaincodeExample{}
+	interfaces := ccs.Interfaces{
+		"org.hyperledger.chaincode.example02": self,
+		"appinit": self,
+	}
+
+	err := ccs.Start(interfaces) // Our one instance implements both Transactions and Queries interfaces
 	if err != nil {
-		fmt.Printf("Error starting Simple chaincode: %s", err)
+		fmt.Printf("Error starting example chaincode: %s", err)
 	}
 }
 
-// Init resets all the things
-func (t *SimpleChaincode) Init(stub *shim.ChaincodeStub, function string, args []string) ([]byte, error) {
-	if len(args) != 1 {
-		return nil, errors.New("Incorrect number of arguments. Expecting 1")
-	}
+//-------------------------------------------------
+// Helpers
+//-------------------------------------------------
+func (t *ChaincodeExample) PutState(stub *shim.ChaincodeStub, party *appinit.Party) error {
+	return stub.PutState(party.Entity, []byte(strconv.Itoa(int(party.Value))))
+}
 
-	err := stub.PutState("hello_world", []byte(args[0]))
+func (t *ChaincodeExample) GetState(stub *shim.ChaincodeStub, entity string) (int, error) {
+	bytes, err := stub.GetState(entity)
 	if err != nil {
-		return nil, err
+		return 0, errors.New("Failed to get state")
+	}
+	if bytes == nil {
+		return 0, errors.New("Entity not found")
 	}
 
-	return nil, nil
-}
-
-// Invoke isur entry point to invoke a chaincode function
-func (t *SimpleChaincode) Invoke(stub *shim.ChaincodeStub, function string, args []string) ([]byte, error) {
-	fmt.Println("invoke is running " + function)
-
-	// Handle different functions
-	if function == "init" {
-		return t.Init(stub, "init", args)
-	} else if function == "write" {
-		return t.write(stub, args)
-	}
-	fmt.Println("invoke did not find func: " + function)
-
-	return nil, errors.New("Received unknown function invocation")
-}
-
-// Query is our entry point for queries
-func (t *SimpleChaincode) Query(stub *shim.ChaincodeStub, function string, args []string) ([]byte, error) {
-	fmt.Println("query is running " + function)
-
-	// Handle different functions
-	if function == "read" { //read a variable
-		return t.read(stub, args)
-	}
-	fmt.Println("query did not find func: " + function)
-
-	return nil, errors.New("Received unknown function query")
-}
-
-// write - invoke function to write key/value pair
-func (t *SimpleChaincode) write(stub *shim.ChaincodeStub, args []string) ([]byte, error) {
-	var key, value string
-	var err error
-	fmt.Println("running write()")
-
-	if len(args) != 2 {
-		return nil, errors.New("Incorrect number of arguments. Expecting 2. name of the key and value to set")
-	}
-
-	key = args[0] //rename for funsies
-	value = args[1]
-	err = stub.PutState(key, []byte(value)) //write the variable into the chaincode state
-	if err != nil {
-		return nil, err
-	}
-	return nil, nil
-}
-
-// read - query function to read key/value pair
-func (t *SimpleChaincode) read(stub *shim.ChaincodeStub, args []string) ([]byte, error) {
-	var key, jsonResp string
-	var err error
-
-	if len(args) != 1 {
-		return nil, errors.New("Incorrect number of arguments. Expecting name of the key to query")
-	}
-
-	key = args[0]
-	valAsbytes, err := stub.GetState(key)
-	if err != nil {
-		jsonResp = "{\"Error\":\"Failed to get state for " + key + "\"}"
-		return nil, errors.New(jsonResp)
-	}
-
-	return valAsbytes, nil
+	val, _ := strconv.Atoi(string(bytes))
+	return val, nil
 }
